@@ -16,41 +16,35 @@ const PORT = process.env.PORT || 5000;
 // Connect to MongoDB
 connectDB();
 
-// Body parsing middleware (MUST be before CORS)
+// Body parsing middleware (MUST be first)
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// DISABLE CORS COMPLETELY FOR PAYMENT ROUTES
-app.use('/api/payment', (req, res, next) => {
+// COMPLETELY DISABLE CORS FOR ALL PAYMENT ROUTES
+app.use('/api/payment*', (req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Content-Length, X-Requested-With');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-razorpay-signature');
+  res.header('Access-Control-Allow-Credentials', 'true');
   
-  // Handle preflight requests
+  // Handle preflight OPTIONS requests
   if (req.method === 'OPTIONS') {
-    res.sendStatus(200);
-  } else {
-    next();
+    return res.status(200).end();
   }
+  
+  next();
 });
 
-// Security middleware (after payment CORS)
+// Security middleware (after payment CORS bypass)
 app.use(helmet({
-  crossOriginEmbedderPolicy: false,
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:"],
-    },
-  },
+  crossOriginEmbedderPolicy: false
 }));
 
-// Rate limiting
+// Rate limiting (but exclude payment routes)
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
+  skip: (req) => req.url.startsWith('/api/payment'), // Skip rate limiting for payment routes
   message: {
     success: false,
     message: 'Too many requests from this IP, please try again later.'
@@ -58,25 +52,34 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Regular CORS for other routes
+// Regular CORS for non-payment routes
 const allowedOrigins = (process.env.FRONTEND_URLS || 'http://localhost:5173').split(',').map(x => x.trim());
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    return callback(new Error('CORS policy: Origin not allowed'), false);
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+app.use((req, res, next) => {
+  // Skip CORS for payment routes (already handled above)
+  if (req.url.startsWith('/api/payment')) {
+    return next();
+  }
+  
+  const origin = req.headers.origin;
+  if (!origin || allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin || '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Allow-Credentials', 'true');
+  }
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
+  next();
+});
 
 // Logging
 app.use(morgan('combined'));
 
-// Routes
+// Routes (payment routes MUST come first)
 app.use('/api/payment', paymentRoutes);
 app.use('/api/users', userRoutes);
 
@@ -102,7 +105,8 @@ app.use('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`Allowed Origins: ${allowedOrigins.join(', ')}`);
+  console.log(`Payment CORS: DISABLED (all origins allowed)`);
+  console.log(`Regular CORS allowed origins: ${allowedOrigins.join(', ')}`);
 });
 
 module.exports = app;
