@@ -31,12 +31,11 @@ const submitFormAndCreatePayment = async (req, res, next) => {
       experience
     });
 
-    // Save user within the transaction
     const savedUser = await user.save({ session });
 
-    const amount = parseInt(process.env.PAYMENT_AMOUNT, 10) || 50000; // Amount in paise
-    const uniqueSuffix = crypto.randomBytes(3).toString('hex'); // 6 hex characters
-    const receipt = `rcpt_${savedUser._id}_${uniqueSuffix}`; // Total length: 5 + 24 + 1 + 6 = 36 chars
+    const amount = parseInt(process.env.PAYMENT_AMOUNT, 10) || 50000;
+    const uniqueSuffix = crypto.randomBytes(3).toString('hex');
+    const receipt = `rcpt_${savedUser._id}_${uniqueSuffix}`;
 
     const options = {
       amount: amount,
@@ -49,12 +48,7 @@ const submitFormAndCreatePayment = async (req, res, next) => {
       }
     };
 
-    // This is the likely point of failure. If it fails, the transaction will be aborted.
     const order = await razorpay.orders.create(options);
-
-    // Construct the callback and cancel URLs
-    const callbackUrl = `${process.env.BACKEND_URL}/api/payment/verify`;
-    const cancelUrl = `${process.env.BACKEND_URL}/api/payment/failed?orderId=${order.id}`;
 
     const payment = new Payment({
       userId: savedUser._id,
@@ -64,16 +58,16 @@ const submitFormAndCreatePayment = async (req, res, next) => {
       status: 'created'
     });
 
-    // Save payment within the transaction
     const savedPayment = await payment.save({ session });
-
-    // Update user with payment ID within the transaction
     savedUser.paymentId = savedPayment._id;
     await savedUser.save({ session });
 
     await session.commitTransaction();
 
-    // Construct the Razorpay Standard Checkout URL
+    // Build the payment link that frontend expects
+    const callbackUrl = `${process.env.BACKEND_URL}/api/payment/verify`;
+    const cancelUrl = `${process.env.BACKEND_URL}/api/payment/failed?orderId=${order.id}`;
+    
     const checkoutUrl = new URL('https://api.razorpay.com/v1/checkout/embedded');
     checkoutUrl.searchParams.set('key_id', process.env.RAZORPAY_KEY_ID);
     checkoutUrl.searchParams.set('order_id', order.id);
@@ -84,8 +78,11 @@ const submitFormAndCreatePayment = async (req, res, next) => {
     checkoutUrl.searchParams.set('callback_url', callbackUrl);
     checkoutUrl.searchParams.set('cancel_url', cancelUrl);
 
-    // Redirect the user's browser directly to the Razorpay checkout page.
-    res.redirect(303, checkoutUrl.toString());
+    // Return the payment link that frontend expects
+    res.status(200).json({
+      success: true,
+      paymentLink: checkoutUrl.toString() // This is what your frontend is looking for
+    });
 
   } catch (error) {
     await session.abortTransaction();
